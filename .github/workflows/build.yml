@@ -52,6 +52,18 @@ on:
         default: "14791245"
         type: string
 
+      build_user:
+        description: "Override KBUILD_BUILD_USER (default empty = leave stock 'build-user'). Set to match stock, e.g. android-build."
+        required: false
+        default: ""
+        type: string
+
+      build_host:
+        description: "Override KBUILD_BUILD_HOST (default empty = leave stock 'build-host'). Set to match stock, e.g. android-build."
+        required: false
+        default: ""
+        type: string
+
 env:
   MANIFEST_URL: https://android.googlesource.com/kernel/manifest
   OTA_URL: ${{ inputs.ota_url }}
@@ -202,8 +214,13 @@ jobs:
           fi
 
           if [ -n "${{ inputs.build_id }}" ]; then
-            export BUILD_ID="${{ inputs.build_id }}"
-            echo ">>> Appending build ID: -ab${BUILD_ID}"
+            export BUILD_NUMBER="${{ inputs.build_id }}"
+            echo ">>> Build ID: -ab${BUILD_NUMBER}"
+          fi
+          if [ -n "${{ inputs.build_user }}" ]; then
+            export BUILD_USER="${{ inputs.build_user }}"
+            export BUILD_HOST="${{ inputs.build_host }}"
+            echo ">>> Build user/host: ${BUILD_USER}@${BUILD_HOST}"
           fi
 
           chmod +x scripts/build_kernel.sh

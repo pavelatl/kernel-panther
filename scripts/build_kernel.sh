@@ -16,16 +16,37 @@ if [ -f "tools/bazel" ]; then
     echo ">>> Kleaf/Bazel build detected"
 
     echo "  -> SOURCE_DATE_EPOCH = ${SOURCE_DATE_EPOCH}"
-    echo "  -> STABLE_BUILD_VERSION = -g${OFFICIAL_HASH}"
-    echo "  -> KLEAF_USER = android-build"
+    echo "  -> OFFICIAL_HASH     = ${OFFICIAL_HASH}"
+    [ -n "${BUILD_NUMBER:-}" ] && echo "  -> BUILD_NUMBER      = ${BUILD_NUMBER} (-> -ab${BUILD_NUMBER})"
+    [ -n "${BUILD_USER:-}" ]  && echo "  -> BUILD_USER/HOST   = ${BUILD_USER}@${BUILD_HOST}"
 
-    # --config=stamp is REQUIRED for SOURCE_DATE_EPOCH / STABLE_BUILD_VERSION
-    # to take effect. Without it, Kleaf's kernel_env action forcibly exports
-    # SOURCE_DATE_EPOCH=0 (clobbering --action_env) -> 1970 build date, and
-    # the scm version becomes '-maybe-dirty'. The config is defined in
-    # build/kernel/kleaf/bazelrc/stamp.bazelrc (imported by common.bazelrc),
-    # which is the bazelrc tools/bazel actually uses (there is NO root .bazelrc
-    # and NO build/kernel/kleaf/.bazelrc in this manifest).
+    # ── Suppress '-dirty' in the scm version ───────────────────
+    # Kleaf's stamping runs 'git status -uno --porcelain' on the kernel tree;
+    # our KSU/SUSFS patches modify tracked files -> it appends '-dirty'.
+    # Mark those files assume-unchanged so git reports the tree as clean.
+    # (Untracked additions like fs/susfs.c are already ignored by -uno.)
+    # Same method as shoey63/Kernel-Builder-GKI-Susfs.
+    echo ">>> Marking modified files assume-unchanged (suppresses -dirty)..."
+    git -C common ls-files -m | xargs -r git -C common update-index --assume-unchanged
+
+    # ── Override build-user@build-host ─────────────────────────
+    # _setup_env.sh hardcodes KBUILD_BUILD_USER=build-user /
+    # KBUILD_BUILD_HOST=build-host (unconditionally, after fragments) and
+    # ignores KLEAF_USER. Patch the file directly when overrides are set.
+    if [ -n "${BUILD_USER:-}${BUILD_HOST:-}" ]; then
+        SETUP_ENV="$(find build -name '_setup_env.sh' 2>/dev/null | head -1)"
+        if [ -n "${SETUP_ENV}" ] && [ -f "${SETUP_ENV}" ]; then
+            echo ">>> Patching ${SETUP_ENV} for KBUILD_BUILD_USER/HOST..."
+            [ -n "${BUILD_USER:-}" ] && sed -i "s/KBUILD_BUILD_USER=build-user/KBUILD_BUILD_USER=${BUILD_USER}/" "${SETUP_ENV}"
+            [ -n "${BUILD_HOST:-}" ] && sed -i "s/KBUILD_BUILD_HOST=build-host/KBUILD_BUILD_HOST=${BUILD_HOST}/" "${SETUP_ENV}"
+        else
+            echo "  [!] _setup_env.sh not found; skipping user/host override"
+        fi
+    fi
+
+    # --config=stamp is REQUIRED: makes Kleaf honor SOURCE_DATE_EPOCH and embed
+    # the scm version (-g<hash>) instead of '-maybe-dirty'. Defined in
+    # build/kernel/kleaf/bazelrc/stamp.bazelrc (imported by common.bazelrc).
     CONFIG_FLAG="--config=stamp"
 
     # Build the defconfig fragment flag only if the fragment was declared.
@@ -36,24 +57,20 @@ if [ -f "tools/bazel" ]; then
         echo "  [!] custom_fragment not declared in common/BUILD.bazel — KSU/SUSFS configs may be missing!"
     fi
 
-    # Compose the stable version suffix. Default: -g<hash>. If BUILD_ID is set
-    # (e.g. 14791245 from a stock firmware), append -ab<id> to match stock's
-    # '-g<hash>-ab<id>' format.
-    STABLE_SUFFIX="-g${OFFICIAL_HASH}"
-    if [ -n "${BUILD_ID:-}" ]; then
-        STABLE_SUFFIX="${STABLE_SUFFIX}-ab${BUILD_ID}"
+    # Kleaf's stamp pipeline reads BUILD_NUMBER to append -ab<id>. It does NOT
+    # read STABLE_BUILD_VERSION / KLEAF_KERNEL_BUILD_VERSION (dead under stamp).
+    # Pass via BOTH repo_env (seen by workspace_status_stamp.py -> STABLE_SCMVERSIONS)
+    # and action_env (belt+suspenders).
+    BUILD_NUMBER_FLAG=""
+    if [ -n "${BUILD_NUMBER:-}" ]; then
+        BUILD_NUMBER_FLAG="--repo_env=BUILD_NUMBER=${BUILD_NUMBER} --action_env=BUILD_NUMBER=${BUILD_NUMBER}"
     fi
-    echo "  -> STABLE_BUILD_VERSION = ${STABLE_SUFFIX}"
 
-    echo ">>> bazel cmdline: tools/bazel run ${CONFIG_FLAG} ${FRAGMENT_FLAG}"
-    echo "    --action_env=SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} STABLE_BUILD_VERSION=${STABLE_SUFFIX}"
+    echo ">>> bazel cmdline: tools/bazel run ${CONFIG_FLAG} ${FRAGMENT_FLAG} ${BUILD_NUMBER_FLAG}"
     # shellcheck disable=SC2086
-    tools/bazel run ${CONFIG_FLAG} ${FRAGMENT_FLAG} \
+    tools/bazel run ${CONFIG_FLAG} ${FRAGMENT_FLAG} ${BUILD_NUMBER_FLAG} \
       --action_env=SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
-      --action_env=STABLE_BUILD_VERSION="${STABLE_SUFFIX}" \
-      --action_env=KLEAF_KERNEL_BUILD_VERSION="${STABLE_SUFFIX}" \
       --action_env=KLEAF_SKIP_ABI_CHECKS=true \
-      --action_env=KLEAF_USER=android-build \
       //common:kernel_aarch64_dist \
       -- \
       --destdir=out/dist
