@@ -141,11 +141,19 @@ jobs:
           # explicitly before checking it out. OFFICIAL_HASH/OFFICIAL_DATE are
           # captured AFTER this, so they reflect the pinned commit.
           if [ -n "${{ inputs.kernel_commit }}" ]; then
-            echo ">>> Pinning kernel/common to ${{ inputs.kernel_commit }}"
-            # repo names the remote 'aosp' (not 'origin'), so fetch directly
-            # from the canonical googlesource URL to be robust.
-            git fetch --depth=1 https://android.googlesource.com/kernel/common ${{ inputs.kernel_commit }}
-            git checkout ${{ inputs.kernel_commit }}
+            KERNEL_COMMIT="${{ inputs.kernel_commit }}"
+            # googlesource won't fetch SHORT shas ("couldn't find remote ref"),
+            # only full 40-char ones. Resolve short -> full via gitiles first
+            # so the user can paste the short sha from `uname`.
+            if [ "${#KERNEL_COMMIT}" -lt 40 ]; then
+              echo ">>> Resolving short sha ${KERNEL_COMMIT} via gitiles..."
+              KERNEL_COMMIT="$(curl -fsSL "https://android.googlesource.com/kernel/common/+/${KERNEL_COMMIT}?format=JSON" \
+                | python3 -c 'import sys,json,re; print(json.loads(re.search(r"\{.*\}",sys.stdin.read(),re.S).group(0))["commit"])')"
+              [ -n "${KERNEL_COMMIT}" ] || { echo "[-] Could not resolve commit sha"; exit 1; }
+            fi
+            echo ">>> Pinning kernel/common to ${KERNEL_COMMIT}"
+            git fetch --depth=1 https://android.googlesource.com/kernel/common "${KERNEL_COMMIT}"
+            git checkout "${KERNEL_COMMIT}"
           fi
           echo "OFFICIAL_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "OFFICIAL_DATE=$(git log -1 --format=%ct)" >> $GITHUB_ENV
