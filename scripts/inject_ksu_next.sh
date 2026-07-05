@@ -16,6 +16,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd kernel_workspace
+WORKSPACE_DIR="$(pwd)"
 [ -d common ] || { echo "[-] common/ not found"; exit 1; }
 
 KSU_OWNER="pershoot"
@@ -47,16 +48,24 @@ else
     fi
 fi
 
-# ── Run native setup.sh (patch OWNER so it clones pershoot's fork) ─
-echo ">>> Running setup.sh with patched OWNER..."
-cd "${KSU_DIR}/kernel"
-# Temporarily patch the OWNER to match pershoot's fork
-# so that setup.sh clones the right repo
-sed -i "s/^OWNER=.*/OWNER=\"${KSU_OWNER}\"/" setup.sh
-sed -i "s/^REPO=.*/REPO=\"${KSU_REPO}\"/" setup.sh
-bash setup.sh ${KSU_TAG:-}
+# ── Symlink + manual integration (no setup.sh) ─────────────────
+cd "${WORKSPACE_DIR}"
 
-cd "$OLDPWD/kernel_workspace"
+DRIVER_ROOT="common/drivers"
+rm -rf "${DRIVER_ROOT}/kernelsu"
+ln -sfn "../../${KSU_DIR}/kernel" "${DRIVER_ROOT}/kernelsu"
+[ -L "${DRIVER_ROOT}/kernelsu" ] || { echo "[-] Symlink failed"; exit 1; }
+echo ">>> Symlink: ${DRIVER_ROOT}/kernelsu → ../../${KSU_DIR}/kernel"
+
+echo ">>> Patching drivers/Makefile..."
+if ! grep -q "kernelsu" "${DRIVER_ROOT}/Makefile" 2>/dev/null; then
+    echo 'obj-$(CONFIG_KSU)	+= kernelsu/' >> "${DRIVER_ROOT}/Makefile"
+fi
+
+echo ">>> Patching drivers/Kconfig..."
+if ! grep -q "kernelsu/Kconfig" "${DRIVER_ROOT}/Kconfig" 2>/dev/null; then
+    echo 'source "drivers/kernelsu/Kconfig"' >> "${DRIVER_ROOT}/Kconfig"
+fi
 
 # ── Find upstream sync point for version parity ──────────────────
 echo ">>> Locating upstream sync point..."
@@ -72,7 +81,7 @@ echo "  -> Upstream count: ${CALCULATED_COUNT}"
 echo "  -> Upstream tag:   ${CALCULATED_TAG}"
 
 # ── Gatekeeper: Bazel sandbox bypass ─────────────────────────────
-TARGET_KBUILD="${KSU_DIR}/kernel/Kbuild"
+TARGET_KBUILD="${WORKSPACE_DIR}/${KSU_DIR}/kernel/Kbuild"
 
 if [ -f "$TARGET_KBUILD" ]; then
     {
@@ -89,11 +98,5 @@ if [ -f "$TARGET_KBUILD" ]; then
     } > "${TARGET_KBUILD}.tmp" && mv "${TARGET_KBUILD}.tmp" "$TARGET_KBUILD"
     echo ">>> Gatekeeper overrides injected into Kbuild"
 fi
-
-# ── Symlink ──────────────────────────────────────────────────────
-DRIVER_ROOT="common/drivers"
-rm -rf "${DRIVER_ROOT}/kernelsu"
-ln -sfn "../../${KSU_DIR}/kernel" "${DRIVER_ROOT}/kernelsu"
-[ -L "${DRIVER_ROOT}/kernelsu" ] || { echo "[-] Symlink failed"; exit 1; }
 
 echo ">>> ${KSU_OWNER}/${KSU_REPO} integrated!"
