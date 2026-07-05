@@ -87,8 +87,13 @@ BLK
         insert_before common/fs/namespace.c '#include "pnode.h"' "${TMP_BLOCK}"
     fi
 
-    # 3b. extern declarations after a known anchor include
-    if ! grep -q 'susfs_is_current_ksu_domain' common/fs/namespace.c; then
+    # 3b. extern declarations after a known anchor include.
+    # Guard on the DECLARATION, not the bare token — the bare token also
+    # matches call sites in hunks that applied successfully, which previously
+    # caused this block to be silently skipped (run #8: 13 compile errors in
+    # namespace.c from undeclared susfs_is_current_ksu_domain /
+    # susfs_is_sdcard_android_data_not_decrypted / CL_COPY_MNT_NS).
+    if ! grep -q 'extern bool susfs_is_current_ksu_domain' common/fs/namespace.c; then
         ANCHOR=""
         for a in "trace/hooks/blk.h" "linux/nsproxy.h" "linux/mount.h"; do
             if grep -q "#include <${a}>" common/fs/namespace.c; then
@@ -110,11 +115,17 @@ BLK
         fi
     fi
 
-    if { grep -q 'susfs_is_current_ksu_domain' common/fs/namespace.c \
-        || grep -q 'susfs_def.h' common/fs/namespace.c; }; then
+    # Success requires ALL three pieces (include + extern decl + define).
+    # The previous weak OR-check (bare token || susfs_def.h) falsely reported
+    # OK because susfs_def.h was inserted by block 3a while block 3b was
+    # skipped — masking the missing externs until compilation.
+    if grep -q 'susfs_def.h' common/fs/namespace.c \
+       && grep -q 'extern bool susfs_is_current_ksu_domain' common/fs/namespace.c \
+       && grep -q 'CL_COPY_MNT_NS' common/fs/namespace.c; then
         echo "  -> namespace.c OK"; rm -f common/fs/namespace.c.rej
     else
-        echo "  [-] namespace.c fix failed" >&2
+        echo "  [-] namespace.c fix failed (missing extern/CL_COPY_MNT_NS)" >&2
+        exit 1
     fi
 fi
 
