@@ -5,9 +5,10 @@ on:
   workflow_dispatch:
     inputs:
       target_version:
-        description: "Kernel version (e.g., 6.1.157)"
-        required: true
+        description: "Kernel version (default 6.1.157 = Pixel 7 stock)"
+        required: false
         type: string
+        default: "6.1.157"
 
       enable_susfs:
         description: "Enable SUSFS kernel patches"
@@ -40,15 +41,15 @@ on:
         type: string
 
       kernel_commit:
-        description: "Pin kernel/common to a specific commit (e.g. bd23337e42e7 for Pixel 7 stock 6.1.157). Blank = branch HEAD."
+        description: "Pin kernel/common to a commit (full sha preferred). Default = Pixel 7 CP2A.260605.012 stock 6.1.157."
         required: false
-        default: ""
+        default: "bd23337e42e794964a89f47596daf1209a25ee1a"
         type: string
 
       build_id:
-        description: "Android Build ID appended as -ab<id> (e.g. 14791245 → -ab14791245). Blank = none."
+        description: "Android Build ID appended as -ab<id>. Default = Pixel 7 stock (14791245)."
         required: false
-        default: ""
+        default: "14791245"
         type: string
 
 env:
@@ -147,9 +148,18 @@ jobs:
             # so the user can paste the short sha from `uname`.
             if [ "${#KERNEL_COMMIT}" -lt 40 ]; then
               echo ">>> Resolving short sha ${KERNEL_COMMIT} via gitiles..."
-              KERNEL_COMMIT="$(curl -fsSL "https://android.googlesource.com/kernel/common/+/${KERNEL_COMMIT}?format=JSON" \
-                | python3 -c 'import sys,json,re; print(json.loads(re.search(r"\{.*\}",sys.stdin.read(),re.S).group(0))["commit"])')"
-              [ -n "${KERNEL_COMMIT}" ] || { echo "[-] Could not resolve commit sha"; exit 1; }
+              RAW="$(curl -fsSL "https://android.googlesource.com/kernel/common/+/${KERNEL_COMMIT}?format=JSON" 2>/dev/null || true)"
+              if [ -z "$RAW" ]; then
+                echo "[-] gitiles returned nothing for '${KERNEL_COMMIT}' — likely a typo. Use a valid short or full (40-char) sha."
+                exit 1
+              fi
+              KERNEL_COMMIT="$(printf '%s' "$RAW" | python3 -c '
+import sys, json, re
+m = re.search(r"\{.*\}", sys.stdin.read(), re.S)
+if not m:
+    sys.exit(1)
+print(json.loads(m.group(0))["commit"])
+')" || { echo "[-] Could not parse gitiles response for '${KERNEL_COMMIT}'"; exit 1; }
             fi
             echo ">>> Pinning kernel/common to ${KERNEL_COMMIT}"
             git fetch --depth=1 https://android.googlesource.com/kernel/common "${KERNEL_COMMIT}"
