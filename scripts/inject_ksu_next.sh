@@ -56,7 +56,10 @@ fi
 echo ">>> HEAD: $(git rev-parse --short HEAD) ($(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached))"
 
 # Sanity: warn loudly if CONFIG_KSU_SUSFS is missing (e.g. user forced a tag).
-if ! grep -q 'CONFIG_KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
+# NOTE: Kconfig declares this as `config KSU_SUSFS` (no CONFIG_ prefix — the
+# prefix is only added when referenced in C #ifdef). Match the bare token so
+# the check actually finds the declaration.
+if ! grep -q 'KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
     echo "  [!] WARNING: CONFIG_KSU_SUSFS not found in kernel/Kconfig."
     echo "      SUSFS bridge will be compiled out. Use --branch dev-susfs for SUSFS."
 fi
