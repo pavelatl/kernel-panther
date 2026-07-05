@@ -3,28 +3,39 @@ set -euo pipefail
 
 # Build kernel Image using Kleaf/Bazel (modern) or legacy Make.
 # Spoofs build date and git hash via Bazel --action_env flags.
-
-ENABLE_SUSFS="${1:-true}"
+#
+# The custom defconfig fragment (//common:custom_fragment) is injected via
+# the canonical Kleaf --defconfig_fragment flag, configured in
+# configure_kconfigs.sh.
 
 cd kernel_workspace
 mkdir -p ../out out/dist
-
-echo "=== Marking repo as clean (sanitizes custom modifications) ==="
-git -C common ls-files -m | xargs -r git -C common update-index --assume-unchanged
 
 # ── Determine build method ────────────────────────────────────
 if [ -f "tools/bazel" ]; then
     echo ">>> Kleaf/Bazel build detected"
 
-    # SOURCE_DATE_EPOCH controls the kernel's __DATE__ and timestamp
-    # It's already set by the workflow via OFFICIAL_DATE from Google's git log.
-    # If the user provided a custom spoof timestamp, it overrides OFFICIAL_DATE.
-
     echo "  -> SOURCE_DATE_EPOCH = ${SOURCE_DATE_EPOCH}"
     echo "  -> STABLE_BUILD_VERSION = -g${OFFICIAL_HASH}"
     echo "  -> KLEAF_USER = android-build"
 
-    tools/bazel run --config=stamp \
+    # --config=stamp only exists if declared in a .bazelrc; detect to avoid
+    # a hard failure on trees where it is absent.
+    CONFIG_FLAG=""
+    if grep -rq 'stamp' .bazelrc build/kernel/kleaf/.bazelrc 2>/dev/null; then
+        CONFIG_FLAG="--config=stamp"
+    fi
+
+    # Build the defconfig fragment flag only if the fragment was declared.
+    FRAGMENT_FLAG=""
+    if grep -q 'exports_files.*custom_fragment' common/BUILD.bazel 2>/dev/null; then
+        FRAGMENT_FLAG="--defconfig_fragment=//common:custom_fragment"
+    else
+        echo "  [!] custom_fragment not declared in common/BUILD.bazel — KSU/SUSFS configs may be missing!"
+    fi
+
+    # shellcheck disable=SC2086
+    tools/bazel run ${CONFIG_FLAG} ${FRAGMENT_FLAG} \
       --action_env=SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
       --action_env=STABLE_BUILD_VERSION="-g${OFFICIAL_HASH}" \
       --action_env=KLEAF_KERNEL_BUILD_VERSION="-g${OFFICIAL_HASH}" \
@@ -69,7 +80,7 @@ echo ">>> Image: ${IMAGE_PATH}"
 # ── Print kernel version string for verification ───────────────
 echo ""
 echo "========================================"
-KERNEL_VERSION_STRING=$(strings ../out/Image | grep -E "Linux version [0-9]" | head -n1 || true)
+KERNEL_VERSION_STRING="$(strings ../out/Image | grep -E "Linux version [0-9]" | head -n1 || true)"
 if [ -n "$KERNEL_VERSION_STRING" ]; then
     echo "  $KERNEL_VERSION_STRING"
 else

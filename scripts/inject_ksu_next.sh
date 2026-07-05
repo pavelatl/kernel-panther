@@ -2,15 +2,22 @@
 set -euo pipefail
 
 # Integrates pershoot/KernelSU-Next into the GKI kernel source tree.
-# This fork includes pre-applied SUSFS hooks.
+#
+# IMPORTANT: KernelSU-Next SUSFS hooks live ONLY on the `dev-susfs` branch.
+# Release tags (v3.3.0, ...) and the default `dev` branch do NOT define
+# CONFIG_KSU_SUSFS, so they must NOT be used when SUSFS is desired.
+# This script therefore defaults to `dev-susfs`. Override with --tag/--branch.
+#
 # Uses the "Gatekeeper" approach (GNU Make overrides) to bypass the
 # Kleaf/Bazel sandbox and feed correct versioning math to the compiler.
 
 KSU_TAG=""
+KSU_BRANCH="dev-susfs"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --tag) KSU_TAG="$2"; shift 2 ;;
+        --branch) KSU_BRANCH="$2"; shift 2 ;;
         *) echo "Unknown: $1"; exit 1 ;;
     esac
 done
@@ -34,18 +41,24 @@ git clone "https://github.com/${KSU_OWNER}/${KSU_REPO}.git" "${KSU_DIR}"
 
 cd "${KSU_DIR}"
 
-# Checkout specific tag or latest release
+# Checkout: explicit tag wins; otherwise default to the SUSFS-capable branch.
 if [ -n "${KSU_TAG}" ]; then
+    echo ">>> Checking out tag: ${KSU_TAG}"
     git checkout "${KSU_TAG}" 2>/dev/null || {
-        echo "[-] Tag ${KSU_TAG} not found, using latest release"
-        git checkout "$(git describe --abbrev=0 --tags)" 2>/dev/null || true
+        echo "[-] Tag ${KSU_TAG} not found, falling back to branch ${KSU_BRANCH}"
+        git checkout "${KSU_BRANCH}" || { echo "[-] Branch ${KSU_BRANCH} not found"; exit 1; }
     }
 else
-    LATEST_TAG="$(git describe --abbrev=0 --tags 2>/dev/null || echo '')"
-    if [ -n "${LATEST_TAG}" ]; then
-        git checkout "${LATEST_TAG}"
-        echo ">>> Checked out: ${LATEST_TAG}"
-    fi
+    echo ">>> Checking out branch: ${KSU_BRANCH} (SUSFS-capable)"
+    git checkout "${KSU_BRANCH}" || { echo "[-] Branch ${KSU_BRANCH} not found"; exit 1; }
+fi
+
+echo ">>> HEAD: $(git rev-parse --short HEAD) ($(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached))"
+
+# Sanity: warn loudly if CONFIG_KSU_SUSFS is missing (e.g. user forced a tag).
+if ! grep -q 'CONFIG_KSU_SUSFS' kernel/Kconfig 2>/dev/null; then
+    echo "  [!] WARNING: CONFIG_KSU_SUSFS not found in kernel/Kconfig."
+    echo "      SUSFS bridge will be compiled out. Use --branch dev-susfs for SUSFS."
 fi
 
 # ── Symlink + manual integration (no setup.sh) ─────────────────
@@ -59,7 +72,7 @@ echo ">>> Symlink: ${DRIVER_ROOT}/kernelsu → ../../${KSU_DIR}/kernel"
 
 echo ">>> Patching drivers/Makefile..."
 if ! grep -q "kernelsu" "${DRIVER_ROOT}/Makefile" 2>/dev/null; then
-    echo 'obj-$(CONFIG_KSU)	+= kernelsu/' >> "${DRIVER_ROOT}/Makefile"
+    printf 'obj-$(CONFIG_KSU)\t+= kernelsu/\n' >> "${DRIVER_ROOT}/Makefile"
 fi
 
 echo ">>> Patching drivers/Kconfig..."
@@ -76,7 +89,7 @@ SHORT_HASH="${UPSTREAM_HASH:0:7}"
 CALCULATED_COUNT=$(git -C "${KSU_DIR}" rev-list --count "${UPSTREAM_HASH}" 2>/dev/null || echo "0")
 CALCULATED_TAG=$(git -C "${KSU_DIR}" describe --tags --abbrev=0 "${UPSTREAM_HASH}" 2>/dev/null || echo "v0.0.0")
 
-echo "  -> Upstream hash:  ${SHORT_HASH}"
+echo "  -> Upstream hash:  ${SHORT_HASH:-unknown}"
 echo "  -> Upstream count: ${CALCULATED_COUNT}"
 echo "  -> Upstream tag:   ${CALCULATED_TAG}"
 

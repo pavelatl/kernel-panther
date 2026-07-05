@@ -21,20 +21,25 @@ on:
         default: ""
         type: string
 
+      ksu_branch:
+        description: "KernelSU-Next branch (default dev-susfs = SUSFS-capable)"
+        required: false
+        default: "dev-susfs"
+        type: string
+
       ksu_tag:
-        description: "Specific KSU-Next tag (blank = latest release)"
+        description: "Specific KSU-Next tag (overrides ksu_branch; usually leave blank)"
         required: false
         default: ""
         type: string
 
       spoof_timestamp:
-        description: "Custom Unix epoch for build date override (blank = use Google commit timestamp)"
+        description: "Custom Unix epoch for build date override (blank = Google commit timestamp)"
         required: false
         default: ""
         type: string
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   MANIFEST_URL: https://android.googlesource.com/kernel/manifest
   OTA_URL: ${{ inputs.ota_url }}
 
@@ -81,8 +86,8 @@ jobs:
           free -h
 
       - name: Resolve Manifest Branch
-        id: resolve_manifest
         run: |
+          set -eu
           TARGET_RAW="${{ inputs.target_version }}"
           echo ">>> Raw input: $TARGET_RAW"
 
@@ -132,8 +137,10 @@ jobs:
 
       - name: Inject KernelSU-Next (pershoot)
         run: |
-          KSU_ARGS=""
-          [ -n "${{ inputs.ksu_tag }}" ] && KSU_ARGS="--tag ${{ inputs.ksu_tag }}"
+          KSU_ARGS="--branch ${{ inputs.ksu_branch }}"
+          if [ -n "${{ inputs.ksu_tag }}" ]; then
+            KSU_ARGS="--tag ${{ inputs.ksu_tag }}"
+          fi
           bash ./scripts/inject_ksu_next.sh $KSU_ARGS
 
       - name: Integrate SUSFS
@@ -171,17 +178,32 @@ jobs:
           chmod +x tools/magiskboot
           echo ">>> magiskboot ready"
 
+      - name: Download payload-dumper-go
+        if: env.REPACK_ENABLED == 'true'
+        run: |
+          set -eu
+          mkdir -p tools
+          PDG_URL=$(curl -fsSL https://api.github.com/repos/ssut/payload-dumper-go/releases/latest \
+            | grep '"browser_download_url"' \
+            | grep -E 'linux_(x86_64|amd64)' \
+            | head -n1 \
+            | sed -E 's/.*"(https:[^"]+)".*/\1/')
+          [ -n "$PDG_URL" ] || { echo "[-] Could not resolve payload-dumper-go asset URL"; exit 1; }
+          echo ">>> Downloading: $PDG_URL"
+          curl -fsSL -o /tmp/pdg.tar.gz "$PDG_URL"
+          tar -xzf /tmp/pdg.tar.gz -C tools
+          chmod +x tools/payload-dumper-go
+          echo ">>> payload-dumper-go ready: $(tools/payload-dumper-go --version 2>&1 || true)"
+
       - name: Pull stock boot.img from OTA
         if: env.REPACK_ENABLED == 'true'
         run: |
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install -q ssut/payload-dumper-go
           mkdir -p work/stock
           python3 ./scripts/ota_pull.py \
             --source "$OTA_URL" \
             --partition boot \
-            --outdir work/stock
+            --outdir work/stock \
+            --bin "$PWD/tools/payload-dumper-go"
           echo ">>> Pulled stock boot image(s)"
           find work/stock -maxdepth 1 -type f \( -name 'boot.img' -o -name 'boot-*.img' \) -ls
 

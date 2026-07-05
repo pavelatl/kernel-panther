@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Neutralizes ABI protected exports and enables KSU + SUSFS Kconfigs.
+# Builds the custom defconfig fragment (KSU + SUSFS) and exports it as a
+# Bazel label for Kleaf. The fragment is consumed at build time via:
+#     tools/bazel run //common:kernel_aarch64_dist \
+#         --defconfig_fragment=//common:custom_fragment
+#
+# NOTE: We intentionally do NOT sed-edit common/BUILD.bazel to inject
+# `post_defconfig_fragments`. On android14-6.1-lts the kernel_aarch64
+# target is created by the define_common_kernels() macro and the
+# `post_defconfig_fragments` attribute does not exist there — such a sed
+# is a silent no-op. The --defconfig_fragment flag is the canonical way.
+#
 # Usage: configure_kconfigs.sh [true|false]  (enable_susfs, default: true)
 
 ENABLE_SUSFS="${1:-true}"
@@ -16,76 +26,64 @@ for f in common/android/abi_gki_protected_exports*; do
     [ -f "$f" ] && > "$f"
 done
 
-# ── Detect build system ──────────────────────────────────────
 cd common
 
+build_fragment() {
+    cat <<'FRAG'
+# ── KernelSU-Next ──
+CONFIG_KSU=y
+FRAG
+
+    if [ "${ENABLE_SUSFS}" = "true" ]; then
+        cat <<'FRAG'
+# ── SUSFS: KSU bridge (pershoot/KernelSU-Next dev-susfs Kconfig) ──
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+CONFIG_KSU_SUSFS_SUS_MAP=y
+
+# ── SUSFS: kernel core (50_*_AOSP.patch fs/Kconfig) ──
+CONFIG_SUSFS=y
+CONFIG_SUSFS_SUS_PATH=y
+CONFIG_SUSFS_SUS_MOUNT=y
+CONFIG_SUSFS_TRY_UMOUNT=y
+CONFIG_SUSFS_SPOOF_UNLINK=y
+CONFIG_SUSFS_SUS_KSTAT=y
+CONFIG_SUSFS_SUS_OPEN=y
+CONFIG_SUSFS_SUS_INOTIFY=y
+CONFIG_SUSFS_SUS_GETDENTS=y
+CONFIG_SUSFS_SUS_GETDENTS64=y
+CONFIG_SUSFS_SUS_IOCTL=y
+CONFIG_SUSFS_SUS_PATH_PARSE=y
+CONFIG_SUSFS_SUS_MOUNT_PARSE=y
+CONFIG_SUSFS_SPOOF_STATFS=y
+CONFIG_SUSFS_SPOOF_ACCESS=y
+CONFIG_SUSFS_ENABLE_LOG=y
+FRAG
+    fi
+}
+
 if [ -f "BUILD.bazel" ]; then
-    echo ">>> Bazel detected: injecting post_defconfig_fragments..."
-
-    cat > custom_fragment << FRAGEOF
-# ── KernelSU-Next ──
-CONFIG_KSU=y
-
-FRAGEOF
-
-    if [ "${ENABLE_SUSFS}" = "true" ]; then
-        cat >> custom_fragment << 'FRAGEOF'
-# ── SUSFS ──
-CONFIG_SUSFS=y
-CONFIG_SUSFS_SUS_PATH=y
-CONFIG_SUSFS_SUS_MOUNT=y
-CONFIG_SUSFS_TRY_UMOUNT=y
-CONFIG_SUSFS_SPOOF_UNLINK=y
-CONFIG_SUSFS_SUS_KSTAT=y
-CONFIG_SUSFS_SUS_OPEN=y
-CONFIG_SUSFS_SUS_INOTIFY=y
-CONFIG_SUSFS_SUS_GETDENTS=y
-CONFIG_SUSFS_SUS_GETDENTS64=y
-CONFIG_SUSFS_SUS_IOCTL=y
-CONFIG_SUSFS_SUS_PATH_PARSE=y
-CONFIG_SUSFS_SUS_MOUNT_PARSE=y
-CONFIG_SUSFS_SPOOF_STATFS=y
-CONFIG_SUSFS_SPOOF_ACCESS=y
-CONFIG_SUSFS_ENABLE_LOG=y
-FRAGEOF
+    echo ">>> Bazel detected: writing custom_fragment + exports_files..."
+    build_fragment > custom_fragment
+    if ! grep -q 'exports_files(\["custom_fragment"\])' BUILD.bazel 2>/dev/null; then
+        echo 'exports_files(["custom_fragment"])' >> BUILD.bazel
     fi
-
-    echo 'exports_files(["custom_fragment"])' >> BUILD.bazel
-    sed -i '/name = "kernel_aarch64",/a \    post_defconfig_fragments = ["custom_fragment"],' BUILD.bazel
-    echo "custom_fragment" >> .git/info/exclude
-
+    # Keep the workspace clean-ish for any git-based sanity checks.
+    grep -qx 'custom_fragment' .git/info/exclude 2>/dev/null \
+        || echo "custom_fragment" >> .git/info/exclude 2>/dev/null || true
 else
-    echo ">>> Legacy Make detected: creating fragment file..."
-    cat > "arch/arm64/configs/custom.fragment" << FRAGEOF
-# ── KernelSU-Next ──
-CONFIG_KSU=y
-FRAGEOF
-
-    if [ "${ENABLE_SUSFS}" = "true" ]; then
-        cat >> "arch/arm64/configs/custom.fragment" << 'FRAGEOF'
-# ── SUSFS ──
-CONFIG_SUSFS=y
-CONFIG_SUSFS_SUS_PATH=y
-CONFIG_SUSFS_SUS_MOUNT=y
-CONFIG_SUSFS_TRY_UMOUNT=y
-CONFIG_SUSFS_SPOOF_UNLINK=y
-CONFIG_SUSFS_SUS_KSTAT=y
-CONFIG_SUSFS_SUS_OPEN=y
-CONFIG_SUSFS_SUS_INOTIFY=y
-CONFIG_SUSFS_SUS_GETDENTS=y
-CONFIG_SUSFS_SUS_GETDENTS64=y
-CONFIG_SUSFS_SUS_IOCTL=y
-CONFIG_SUSFS_SUS_PATH_PARSE=y
-CONFIG_SUSFS_SUS_MOUNT_PARSE=y
-CONFIG_SUSFS_SPOOF_STATFS=y
-CONFIG_SUSFS_SPOOF_ACCESS=y
-CONFIG_SUSFS_ENABLE_LOG=y
-FRAGEOF
-    fi
-
-    # For legacy builds, export the fragment path
+    echo ">>> Legacy Make detected: writing arch/arm64/configs/custom.fragment..."
+    build_fragment > "arch/arm64/configs/custom.fragment"
     export EXTRA_DEFCONFIG_FRAGMENTS="arch/arm64/configs/custom.fragment"
 fi
 
 cd ..
 echo ">>> Kconfig configuration complete"
+echo ">>> Fragment label (Bazel): //common:custom_fragment"

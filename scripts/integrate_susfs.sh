@@ -2,8 +2,17 @@
 set -euo pipefail
 
 # Integrates SUSFS kernel-only patches from pershoot/susfs4ksu.
-# IMPORTANT: Only the kernel patches are applied. The KSU patch is
-# SKIPPED because pershoot/KernelSU-Next already has SUSFS hooks.
+#
+# Method (per pershoot/susfs4ksu README — HYBRID):
+#   1. cp kernel_patches/fs/susfs.c        → common/fs/        (new file)
+#   2. cp kernel_patches/include/linux/*   → common/include/linux/  (susfs.h, susfs_def.h)
+#   3. patch -p1 < 50_add_susfs_in_gki-android14-6.1_AOSP.patch   (in common/)
+#   4. patch -p1 < 60_modules_no-mmio_tracepoints.patch           (optional)
+#
+# The KSU-side patch kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+# is intentionally SKIPPED: inject_ksu_next.sh checks out the `dev-susfs`
+# branch of pershoot/KernelSU-Next, which already defines CONFIG_KSU_SUSFS*
+# and the inline hooks. Applying 10_ on top would conflict.
 #
 # Branch: aosp-android14-6.1-dev
 
@@ -16,7 +25,7 @@ SUSFS_BRANCH="aosp-android14-6.1-dev"
 
 echo "=== Integrating SUSFS (${SUSFS_OWNER}/${SUSFS_REPO}) ==="
 echo ">>> Branch: ${SUSFS_BRANCH}"
-echo ">>> NOTE: Only kernel patches. KSU patch SKIPPED (pre-applied in pershoot/KernelSU-Next)"
+echo ">>> NOTE: KSU bridge patch SKIPPED (dev-susfs provides CONFIG_KSU_SUSFS)."
 
 # ── Clone ───────────────────────────────────────────────────────
 echo ">>> Cloning susfs4ksu..."
@@ -26,52 +35,65 @@ git clone --depth=1 -b "${SUSFS_BRANCH}" \
 
 PATCHES_DIR="susfs4ksu/kernel_patches"
 
-# ── Copy kernel source files ────────────────────────────────────
-echo ">>> Copying fs/ files into common/..."
-cp -rf "${PATCHES_DIR}/fs/"* common/fs/ 2>/dev/null || true
+# ── Copy new kernel source files ────────────────────────────────
+# kernel_patches/fs/ contains ONLY susfs.c (a brand-new file). It does NOT
+# contain full copies of exec.c/open.c/etc — those are modified via the patch.
+echo ">>> Copying fs/susfs.c into common/fs/..."
+cp -rf "${PATCHES_DIR}/fs/"* common/fs/
 
-echo ">>> Copying include/linux/ files into common/..."
-cp -rf "${PATCHES_DIR}/include/linux/"* common/include/linux/ 2>/dev/null || true
+echo ">>> Copying include/linux/{susfs.h,susfs_def.h} into common/include/linux/..."
+cp -rf "${PATCHES_DIR}/include/linux/"* common/include/linux/
+
+# ── helper: apply a patch allowing rejections ──────────────────
+apply_patch() {
+    local patch_name="$1"
+    local patch_src="${PATCHES_DIR}/${patch_name}"
+    [ -f "${patch_src}" ] || { echo "[-] Patch not found: ${patch_src}"; return 1; }
+
+    cp "${patch_src}" "common/${patch_name}"
+    set +e
+    ( cd common && patch -p1 --no-backup-if-mismatch --fuzz=3 < "${patch_name}" )
+    local rc=$?
+    set -e
+    rm -f "common/${patch_name}"
+
+    if [ "${rc}" -eq 0 ]; then
+        echo ">>> ${patch_name} applied cleanly"
+    elif [ "${rc}" -eq 1 ]; then
+        echo ">>> ${patch_name} applied with rejections (fix_susfs_rejections.sh will clean up)"
+    else
+        echo "[-] ${patch_name} failed to apply (rc=${rc})"
+        return "${rc}"
+    fi
+    return 0
+}
 
 # ── Find and apply the AOSP kernel patch ────────────────────────
 AOSP_PATCH=""
 for candidate in \
-    "${PATCHES_DIR}/50_add_susfs_in_gki-android14-6.1_AOSP.patch" \
-    "${PATCHES_DIR}/50_add_susfs_in_aosp-android14-6.1.patch" \
-    "${PATCHES_DIR}/50_add_susfs_in_android14-6.1.patch"; do
-    if [ -f "$candidate" ]; then
-        AOSP_PATCH="$candidate"
+    "50_add_susfs_in_gki-android14-6.1_AOSP.patch" \
+    "50_add_susfs_in_aosp-android14-6.1.patch" \
+    "50_add_susfs_in_android14-6.1.patch"; do
+    if [ -f "${PATCHES_DIR}/${candidate}" ]; then
+        AOSP_PATCH="${candidate}"
         break
     fi
 done
 
-if [ -n "${AOSP_PATCH}" ]; then
-    echo ">>> Found kernel patch: $(basename "${AOSP_PATCH}")"
-    cp "${AOSP_PATCH}" common/
-    (cd common && patch -p1 --no-backup-if-mismatch < "$(basename "${AOSP_PATCH}")") || true
-    rm -f "common/$(basename "${AOSP_PATCH}")"
-    echo ">>> Kernel SUSFS patch applied"
-else
-    echo "[-] No AOSP kernel patch found!"
-    echo "    Available patches in kernel_patches/:"
-    ls "${PATCHES_DIR}"/*.patch 2>/dev/null || echo "    (none)"
+if [ -z "${AOSP_PATCH}" ]; then
+    echo "[-] No AOSP kernel patch found in ${PATCHES_DIR}/"
+    ls "${PATCHES_DIR}"/*.patch 2>/dev/null || echo "    (no .patch files)"
     exit 1
 fi
 
+apply_patch "${AOSP_PATCH}"
+
 # ── Apply modules/mmio tracepoints patch (if present) ──────────
-MODULES_PATCH="${PATCHES_DIR}/60_modules_no-mmio_tracepoints.patch"
-if [ -f "${MODULES_PATCH}" ]; then
-    echo ">>> Applying modules tracepoints patch..."
-    cp "${MODULES_PATCH}" common/
-    (cd common && patch -p1 --no-backup-if-mismatch < "$(basename "${MODULES_PATCH}")") || true
-    rm -f "common/$(basename "${MODULES_PATCH}")"
+MODULES_PATCH="60_modules_no-mmio_tracepoints.patch"
+if [ -f "${PATCHES_DIR}/${MODULES_PATCH}" ]; then
+    apply_patch "${MODULES_PATCH}"
 fi
 
-# ── DO NOT apply the KSU/SUSFS bridge patch ────────────────────
-# The patch at kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
-# is NOT applied because pershoot/KernelSU-Next already contains
-# the SUSFS integration hooks.
-
 echo ""
-echo ">>> SUSFS common-side integration complete!"
-echo ">>> KSU-side patch intentionally SKIPPED"
+echo ">>> SUSFS kernel-side integration complete."
+echo ">>> Run fix_susfs_rejections.sh next to clean up any .rej files."
