@@ -19,12 +19,14 @@ if [ -f "tools/bazel" ]; then
     echo "  -> STABLE_BUILD_VERSION = -g${OFFICIAL_HASH}"
     echo "  -> KLEAF_USER = android-build"
 
-    # --config=stamp only exists if declared in a .bazelrc; detect to avoid
-    # a hard failure on trees where it is absent.
-    CONFIG_FLAG=""
-    if grep -rq 'stamp' .bazelrc build/kernel/kleaf/.bazelrc 2>/dev/null; then
-        CONFIG_FLAG="--config=stamp"
-    fi
+    # --config=stamp is REQUIRED for SOURCE_DATE_EPOCH / STABLE_BUILD_VERSION
+    # to take effect. Without it, Kleaf's kernel_env action forcibly exports
+    # SOURCE_DATE_EPOCH=0 (clobbering --action_env) -> 1970 build date, and
+    # the scm version becomes '-maybe-dirty'. The config is defined in
+    # build/kernel/kleaf/bazelrc/stamp.bazelrc (imported by common.bazelrc),
+    # which is the bazelrc tools/bazel actually uses (there is NO root .bazelrc
+    # and NO build/kernel/kleaf/.bazelrc in this manifest).
+    CONFIG_FLAG="--config=stamp"
 
     # Build the defconfig fragment flag only if the fragment was declared.
     FRAGMENT_FLAG=""
@@ -34,6 +36,8 @@ if [ -f "tools/bazel" ]; then
         echo "  [!] custom_fragment not declared in common/BUILD.bazel — KSU/SUSFS configs may be missing!"
     fi
 
+    echo ">>> bazel cmdline: tools/bazel run ${CONFIG_FLAG} ${FRAGMENT_FLAG}"
+    echo "    --action_env=SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} STABLE_BUILD_VERSION=-g${OFFICIAL_HASH}"
     # shellcheck disable=SC2086
     tools/bazel run ${CONFIG_FLAG} ${FRAGMENT_FLAG} \
       --action_env=SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \

@@ -238,6 +238,13 @@ jobs:
           git clone --depth=1 -b "$AK3_BRANCH" "$AK3_REPO" AnyKernel3-Builder
           rm -rf AnyKernel3-Builder/.git AnyKernel3-Builder/README.md AnyKernel3-Builder/*placeholder
 
+          # Customize anykernel.sh for this device/build
+          sed -i \
+            -e 's|^kernel.string=.*|kernel.string=panther KSU-Next ${{ inputs.target_version }}|' \
+            -e 's|^do.devicecheck=.*|do.devicecheck=1|' \
+            -e 's|^device.name1=.*|device.name1=panther|' \
+            AnyKernel3-Builder/anykernel.sh
+
           cp -f out/Image AnyKernel3-Builder/
           cd AnyKernel3-Builder
           zip -r ../out/final/panther-KSU-Next-AK3.zip .

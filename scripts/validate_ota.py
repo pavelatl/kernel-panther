@@ -16,8 +16,10 @@ def main():
     try:
         resp = requests.head(ota_url, allow_redirects=True, timeout=30)
         if resp.status_code != 200:
-            print(f"[-] OTA URL returned HTTP {resp.status_code}")
-            sys.exit(1)
+            print(f"[-] OTA URL returned HTTP {resp.status_code}; falling back to AK3 zip.")
+            with open(sys.environ["GITHUB_ENV"], "a") as f:
+                f.write("REPACK_ENABLED=false\n")
+            return
         print(f"    HTTP {resp.status_code} — URL is reachable")
 
         ct = resp.headers.get("content-type", "")
