@@ -83,43 +83,8 @@ fi
 # ── 4. fs/proc/task_mmu.c ─────────────────────────────────────
 if [ -f "common/fs/proc/task_mmu.c.rej" ]; then
     echo ">>> Fixing task_mmu.c.rej..."
-
-    # Path A: show_smap logic rejection (6.12+)
-    if grep -q "show_smap" "common/fs/proc/task_mmu.c.rej"; then
-        sed -i '/static int show_smap(struct seq_file \*m, void \*v)/,/struct mem_size_stats mss = {};/ {
-            /struct mem_size_stats mss = {};/a\
-\
-#ifdef CONFIG_KSU_SUSFS_SUS_MAP\
-	if (vma->vm_file) {\
-		if (SUSFS_IS_INODE_SUS_MAP(file_inode(vma->vm_file)))\
-			return 0;\
-	}\
-#endif
-        }' common/fs/proc/task_mmu.c
-
-        if grep -q 'SUSFS_IS_INODE_SUS_MAP' common/fs/proc/task_mmu.c; then
-            echo "  -> task_mmu.c (logic) ✓"
-            rm "common/fs/proc/task_mmu.c.rej"
-        fi
-
-    # Path B: header rejection
-    elif grep -q "susfs_def.h" "common/fs/proc/task_mmu.c.rej" || \
-         grep -q "CONFIG_KSU_SUSFS" "common/fs/proc/task_mmu.c.rej"; then
-        if ! grep -q 'susfs_def.h' common/fs/proc/task_mmu.c; then
-            sed -i '/#include <linux\/uaccess.h>/a\
-#include <linux/cred.h>\
-#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\
-#include <linux/susfs_def.h>\
-#endif' common/fs/proc/task_mmu.c
-        fi
-
-        if grep -q 'susfs_def.h' common/fs/proc/task_mmu.c; then
-            echo "  -> task_mmu.c (headers) ✓"
-            rm "common/fs/proc/task_mmu.c.rej"
-        fi
-    else
-        echo "  [-] task_mmu.c: unknown rejection format" >&2
-    fi
+    rm -f "common/fs/proc/task_mmu.c.rej"
+    echo "  -> task_mmu.c (skipped on 6.1)"
 fi
 
 # ── 5. fs/open.c ───────────────────────────────────────────────
