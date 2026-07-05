@@ -28,6 +28,20 @@ done
 
 cd common
 
+# build_fragment: emits the defconfig fragment consumed by Kleaf via
+# --defconfig_fragment=//common:custom_fragment.
+#
+# IMPORTANT: keep CONFIG_* tokens OUT OF COMMENTS inside the heredoc below.
+# Kleaf's fragment validator does substring matching on the symbol name and
+# will fold any comment line containing a symbol name into that symbol's
+# "expected" value, breaking the build. Explanatory notes live here, in a
+# shell comment (outside the heredoc), where the validator never looks.
+#
+# NOTE on SUSFS naming: pershoot/KernelSU-Next dev-susfs declares the SUSFS
+# bridge under the KSU-prefixed namespace (master + 9 sub-features). The
+# unprefixed legacy names from sidex15/susfs4ksu DO NOT EXIST in pershoot's
+# fork — do not add them. Verified against kernel/Kconfig on dev-susfs and
+# the 50_*_AOSP.patch (#ifdef usage).
 build_fragment() {
     cat <<'FRAG'
 # ── KernelSU-Next ──
@@ -36,9 +50,7 @@ FRAG
 
     if [ "${ENABLE_SUSFS}" = "true" ]; then
         cat <<'FRAG'
-# ── SUSFS (complete verified set; pershoot/KernelSU-Next dev-susfs kernel/Kconfig) ──
-# NOTE: unprefixed CONFIG_SUSFS* symbols do NOT exist in pershoot's fork
-# (legacy sidex15 namespace, renamed to CONFIG_KSU_SUSFS*). Do not add them.
+# ── SUSFS bridge (pershoot/KernelSU-Next dev-susfs) ──
 CONFIG_KSU_SUSFS=y
 CONFIG_KSU_SUSFS_SUS_PATH=y
 CONFIG_KSU_SUSFS_SUS_MOUNT=y
