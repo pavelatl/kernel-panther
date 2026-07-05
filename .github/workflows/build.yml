@@ -142,7 +142,9 @@ jobs:
           # captured AFTER this, so they reflect the pinned commit.
           if [ -n "${{ inputs.kernel_commit }}" ]; then
             echo ">>> Pinning kernel/common to ${{ inputs.kernel_commit }}"
-            git fetch --depth=1 origin ${{ inputs.kernel_commit }}
+            # repo names the remote 'aosp' (not 'origin'), so fetch directly
+            # from the canonical googlesource URL to be robust.
+            git fetch --depth=1 https://android.googlesource.com/kernel/common ${{ inputs.kernel_commit }}
             git checkout ${{ inputs.kernel_commit }}
           fi
           echo "OFFICIAL_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
