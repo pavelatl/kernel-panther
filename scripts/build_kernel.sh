@@ -36,13 +36,22 @@ if [ -f "tools/bazel" ]; then
         echo "  [!] custom_fragment not declared in common/BUILD.bazel — KSU/SUSFS configs may be missing!"
     fi
 
+    # Compose the stable version suffix. Default: -g<hash>. If BUILD_ID is set
+    # (e.g. 14791245 from a stock firmware), append -ab<id> to match stock's
+    # '-g<hash>-ab<id>' format.
+    STABLE_SUFFIX="-g${OFFICIAL_HASH}"
+    if [ -n "${BUILD_ID:-}" ]; then
+        STABLE_SUFFIX="${STABLE_SUFFIX}-ab${BUILD_ID}"
+    fi
+    echo "  -> STABLE_BUILD_VERSION = ${STABLE_SUFFIX}"
+
     echo ">>> bazel cmdline: tools/bazel run ${CONFIG_FLAG} ${FRAGMENT_FLAG}"
-    echo "    --action_env=SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} STABLE_BUILD_VERSION=-g${OFFICIAL_HASH}"
+    echo "    --action_env=SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} STABLE_BUILD_VERSION=${STABLE_SUFFIX}"
     # shellcheck disable=SC2086
     tools/bazel run ${CONFIG_FLAG} ${FRAGMENT_FLAG} \
       --action_env=SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
-      --action_env=STABLE_BUILD_VERSION="-g${OFFICIAL_HASH}" \
-      --action_env=KLEAF_KERNEL_BUILD_VERSION="-g${OFFICIAL_HASH}" \
+      --action_env=STABLE_BUILD_VERSION="${STABLE_SUFFIX}" \
+      --action_env=KLEAF_KERNEL_BUILD_VERSION="${STABLE_SUFFIX}" \
       --action_env=KLEAF_SKIP_ABI_CHECKS=true \
       --action_env=KLEAF_USER=android-build \
       //common:kernel_aarch64_dist \

@@ -39,6 +39,18 @@ on:
         default: ""
         type: string
 
+      kernel_commit:
+        description: "Pin kernel/common to a specific commit (e.g. bd23337e42e7 for Pixel 7 stock 6.1.157). Blank = branch HEAD."
+        required: false
+        default: ""
+        type: string
+
+      build_id:
+        description: "Android Build ID appended as -ab<id> (e.g. 14791245 → -ab14791245). Blank = none."
+        required: false
+        default: ""
+        type: string
+
 env:
   MANIFEST_URL: https://android.googlesource.com/kernel/manifest
   OTA_URL: ${{ inputs.ota_url }}
@@ -124,6 +136,15 @@ jobs:
           repo sync -c --no-tags --no-clone-bundle --current-branch --fail-fast -j$(nproc)
 
           cd common
+          # Optionally pin to a specific commit (e.g. to match a stock build).
+          # repo sync --depth=1 only fetches branch HEAD, so fetch the commit
+          # explicitly before checking it out. OFFICIAL_HASH/OFFICIAL_DATE are
+          # captured AFTER this, so they reflect the pinned commit.
+          if [ -n "${{ inputs.kernel_commit }}" ]; then
+            echo ">>> Pinning kernel/common to ${{ inputs.kernel_commit }}"
+            git fetch --depth=1 origin ${{ inputs.kernel_commit }}
+            git checkout ${{ inputs.kernel_commit }}
+          fi
           echo "OFFICIAL_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "OFFICIAL_DATE=$(git log -1 --format=%ct)" >> $GITHUB_ENV
 
@@ -164,6 +185,11 @@ jobs:
           else
             export SOURCE_DATE_EPOCH="${{ env.OFFICIAL_DATE }}"
             echo ">>> Using GOOGLE timestamp: $SOURCE_DATE_EPOCH"
+          fi
+
+          if [ -n "${{ inputs.build_id }}" ]; then
+            export BUILD_ID="${{ inputs.build_id }}"
+            echo ">>> Appending build ID: -ab${BUILD_ID}"
           fi
 
           chmod +x scripts/build_kernel.sh
