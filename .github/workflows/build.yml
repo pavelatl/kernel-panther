@@ -153,13 +153,7 @@ jobs:
                 echo "[-] gitiles returned nothing for '${KERNEL_COMMIT}' — likely a typo. Use a valid short or full (40-char) sha."
                 exit 1
               fi
-              KERNEL_COMMIT="$(printf '%s' "$RAW" | python3 -c '
-import sys, json, re
-m = re.search(r"\{.*\}", sys.stdin.read(), re.S)
-if not m:
-    sys.exit(1)
-print(json.loads(m.group(0))["commit"])
-')" || { echo "[-] Could not parse gitiles response for '${KERNEL_COMMIT}'"; exit 1; }
+              KERNEL_COMMIT="$(printf '%s' "$RAW" | python3 -c 'import sys,json,re; m=re.search(r"\{.*\}",sys.stdin.read(),re.S); sys.exit(1) if not m else print(json.loads(m.group(0))["commit"])')" || { echo "[-] Could not parse gitiles response for '${KERNEL_COMMIT}'"; exit 1; }
             fi
             echo ">>> Pinning kernel/common to ${KERNEL_COMMIT}"
             git fetch --depth=1 https://android.googlesource.com/kernel/common "${KERNEL_COMMIT}"
