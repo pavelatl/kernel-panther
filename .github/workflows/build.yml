@@ -1,0 +1,230 @@
+name: KernelSU-Next + SUSFS (Pixel 7 panther)
+run-name: "panther ${{ inputs.target_version }} [SUSFS:${{ inputs.enable_susfs }}]"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_version:
+        description: "Kernel version (e.g., 6.1.157)"
+        required: true
+        type: string
+
+      enable_susfs:
+        description: "Enable SUSFS kernel patches"
+        required: false
+        type: boolean
+        default: true
+
+      ota_url:
+        description: "Full OTA ZIP URL (blank = AnyKernel3 zip)"
+        required: false
+        default: ""
+        type: string
+
+      ksu_tag:
+        description: "Specific KSU-Next tag (blank = latest release)"
+        required: false
+        default: ""
+        type: string
+
+      spoof_timestamp:
+        description: "Custom Unix epoch for build date override (blank = use Google commit timestamp)"
+        required: false
+        default: ""
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MANIFEST_URL: https://android.googlesource.com/kernel/manifest
+  OTA_URL: ${{ inputs.ota_url }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Validate OTA URL
+        if: inputs.ota_url != ''
+        run: |
+          sudo apt-get install -qq -y python3-venv > /dev/null
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install -q requests
+          echo "========================================"
+          echo "        OTA VALIDATION RESULT           "
+          echo "========================================"
+          python3 scripts/validate_ota.py
+          echo "========================================"
+
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: false
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
+      - name: Create 16 GB Swap
+        run: |
+          sudo swapoff -a
+          [ -f /swapfile ] && sudo rm -f /swapfile
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "=== Verified Memory ==="
+          free -h
+
+      - name: Resolve Manifest Branch
+        id: resolve_manifest
+        run: |
+          TARGET_RAW="${{ inputs.target_version }}"
+          echo ">>> Raw input: $TARGET_RAW"
+
+          TARGET=$(echo "$TARGET_RAW" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)
+          [ -z "$TARGET" ] && { echo "[-] Could not extract a valid kernel version"; exit 1; }
+
+          echo ">>> Clean target: $TARGET"
+          BASE_VER=$(echo "$TARGET" | cut -d. -f1,2)
+
+          case "$BASE_VER" in
+            5.10) MANIFEST_BRANCH="common-android13-5.10-lts" ;;
+            5.15) MANIFEST_BRANCH="common-android13-5.15-lts" ;;
+            6.1)  MANIFEST_BRANCH="common-android14-6.1-lts" ;;
+            6.6)  MANIFEST_BRANCH="common-android15-6.6-lts" ;;
+            6.12) MANIFEST_BRANCH="common-android16-6.12-lts" ;;
+            *)    echo "[-] Unsupported base version: $BASE_VER"; exit 1 ;;
+          esac
+
+          echo "MANIFEST_BRANCH=$MANIFEST_BRANCH" >> $GITHUB_ENV
+          echo ">>> Resolved manifest branch: $MANIFEST_BRANCH"
+
+      - name: Setup repo tool
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Sync kernel source
+        run: |
+          set -euo pipefail
+          rm -rf kernel_workspace && mkdir -p kernel_workspace && cd kernel_workspace
+          repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" --depth=1
+          repo sync -c --no-tags --no-clone-bundle --current-branch --fail-fast -j$(nproc)
+
+          cd common
+          echo "OFFICIAL_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "OFFICIAL_DATE=$(git log -1 --format=%ct)" >> $GITHUB_ENV
+
+          rm -f .version
+
+          echo "========================================"
+          echo "  Hash : $(git rev-parse --short HEAD)"
+          echo "  Date : $(git log -1 --format='%ci')"
+          echo "  Epoch: $(git log -1 --format=%ct)"
+          echo "========================================"
+
+      - name: Inject KernelSU-Next (pershoot)
+        run: |
+          KSU_ARGS=""
+          [ -n "${{ inputs.ksu_tag }}" ] && KSU_ARGS="--tag ${{ inputs.ksu_tag }}"
+          bash ./scripts/inject_ksu_next.sh $KSU_ARGS
+
+      - name: Integrate SUSFS
+        if: inputs.enable_susfs == true
+        run: bash ./scripts/integrate_susfs.sh
+
+      - name: Fix SUSFS Patch Rejections
+        if: inputs.enable_susfs == true
+        run: bash ./scripts/fix_susfs_rejections.sh
+
+      - name: Configure Kconfigs
+        run: |
+          chmod +x scripts/configure_kconfigs.sh
+          ./scripts/configure_kconfigs.sh "${{ inputs.enable_susfs }}"
+
+      - name: Build kernel Image
+        run: |
+          if [ -n "${{ inputs.spoof_timestamp }}" ]; then
+            export SOURCE_DATE_EPOCH="${{ inputs.spoof_timestamp }}"
+            echo ">>> Using CUSTOM timestamp: $SOURCE_DATE_EPOCH"
+          else
+            export SOURCE_DATE_EPOCH="${{ env.OFFICIAL_DATE }}"
+            echo ">>> Using GOOGLE timestamp: $SOURCE_DATE_EPOCH"
+          fi
+
+          chmod +x scripts/build_kernel.sh
+          bash ./scripts/build_kernel.sh
+
+      - name: Download magiskboot
+        if: env.REPACK_ENABLED == 'true'
+        run: |
+          mkdir -p tools
+          curl -fsSL -o tools/magiskboot \
+            "https://github.com/topjohnwu/magisk/raw/refs/heads/master/prebuilt/x86_64/magiskboot"
+          chmod +x tools/magiskboot
+          echo ">>> magiskboot ready"
+
+      - name: Pull stock boot.img from OTA
+        if: env.REPACK_ENABLED == 'true'
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install -q ssut/payload-dumper-go
+          mkdir -p work/stock
+          python3 ./scripts/ota_pull.py \
+            --source "$OTA_URL" \
+            --partition boot \
+            --outdir work/stock
+          echo ">>> Pulled stock boot image(s)"
+          find work/stock -maxdepth 1 -type f \( -name 'boot.img' -o -name 'boot-*.img' \) -ls
+
+      - name: Repack boot image with built Image
+        if: env.REPACK_ENABLED == 'true'
+        run: |
+          mkdir -p out/final work/repack-tmp
+
+          BOOT_IMG="$(find work/stock -maxdepth 1 -type f \( -name 'boot.img' -o -name 'boot-*.img' \) | head -n1)"
+          [ -n "$BOOT_IMG" ] || { echo "[-] Could not find stock boot image"; exit 1; }
+
+          STOCK_NAME="$(basename "$BOOT_IMG" .img)"
+          cp -f "$BOOT_IMG" "out/final/${STOCK_NAME}-stock.img"
+
+          bash ./scripts/boot_swap.sh \
+            --boot "$BOOT_IMG" \
+            --image "out/Image" \
+            --magiskboot "./tools/magiskboot" \
+            --outdir "out/final" \
+            --outname "${{ env.MANIFEST_BRANCH }}.img" \
+            --workdir "work/repack-tmp"
+
+      - name: Generate AnyKernel3 Zip
+        if: env.REPACK_ENABLED != 'true'
+        run: |
+          mkdir -p out/final
+
+          AK3_REPO="https://github.com/shoey63/AnyKernel3.git"
+          AK3_BRANCH="master"
+
+          echo ">>> Cloning AnyKernel3..."
+          git clone --depth=1 -b "$AK3_BRANCH" "$AK3_REPO" AnyKernel3-Builder
+          rm -rf AnyKernel3-Builder/.git AnyKernel3-Builder/README.md AnyKernel3-Builder/*placeholder
+
+          cp -f out/Image AnyKernel3-Builder/
+          cd AnyKernel3-Builder
+          zip -r ../out/final/panther-KSU-Next-AK3.zip .
+          cd ..
+          rm -rf AnyKernel3-Builder
+
+      - name: Upload artifact (Kernel)
+        uses: actions/upload-artifact@v4
+        with:
+          name: panther-kernel-${{ inputs.target_version }}
+          path: out/final/
+          if-no-files-found: error
