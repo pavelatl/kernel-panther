@@ -283,7 +283,7 @@ jobs:
             --outname "${{ env.MANIFEST_BRANCH }}.img" \
             --workdir "work/repack-tmp"
 
-      - name: Generate AnyKernel3 Zip
+      - name: Assemble AnyKernel3 flashable
         if: env.REPACK_ENABLED != 'true'
         run: |
           mkdir -p out/final
@@ -303,10 +303,16 @@ jobs:
             AnyKernel3-Builder/anykernel.sh
 
           cp -f out/Image AnyKernel3-Builder/
-          cd AnyKernel3-Builder
-          zip -r ../out/final/panther-KSU-Next-AK3.zip .
-          cd ..
+
+          # Lay the AK3 contents DIRECTLY into out/final/. Then the GitHub
+          # artifact zip (panther-kernel-<ver>.zip from upload-artifact) IS the
+          # flashable AK3 zip — anykernel.sh sits at its root, so KernelFlasher
+          # accepts it with no inner-zip extraction needed. cp -a preserves
+          # executable bits (tools/busybox, etc.).
+          cp -a AnyKernel3-Builder/. out/final/
           rm -rf AnyKernel3-Builder
+          echo ">>> out/final now holds the AnyKernel3 tree:"
+          ls -la out/final | head -20
 
       - name: Upload artifact (Kernel)
         uses: actions/upload-artifact@v4
