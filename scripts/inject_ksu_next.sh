@@ -1,23 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Integrates pershoot/KernelSU-Next into the GKI kernel source tree.
+# Integrates KernelSU-Next into the GKI kernel source tree.
 #
-# IMPORTANT: KernelSU-Next SUSFS hooks live ONLY on the `dev-susfs` branch.
-# Release tags (v3.3.0, ...) and the default `dev` branch do NOT define
-# CONFIG_KSU_SUSFS, so they must NOT be used when SUSFS is desired.
-# This script therefore defaults to `dev-susfs`. Override with --tag/--branch.
+# IMPORTANT: KernelSU-Next SUSFS hooks live ONLY on the `dev-susfs` branch
+# (pershoot fork) OR on upstream `-legacy-susfs` release tags
+# (e.g. v3.1.0-legacy-susfs). Plain release tags (v3.3.0, ...) and the
+# default `dev` branch do NOT define CONFIG_KSU_SUSFS, so they must NOT be
+# used when SUSFS is desired.
+# This script therefore defaults to pershoot's `dev-susfs` branch.
+# Override with --tag/--branch. Use --owner KernelSU-Next for upstream-only
+# tags (e.g. --owner KernelSU-Next --tag v3.1.0-legacy-susfs).
 #
 # Uses the "Gatekeeper" approach (GNU Make overrides) to bypass the
 # Kleaf/Bazel sandbox and feed correct versioning math to the compiler.
 
 KSU_TAG=""
 KSU_BRANCH="dev-susfs"
+KSU_OWNER="pershoot"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --tag) KSU_TAG="$2"; shift 2 ;;
         --branch) KSU_BRANCH="$2"; shift 2 ;;
+        --owner) KSU_OWNER="$2"; shift 2 ;;
         *) echo "Unknown: $1"; exit 1 ;;
     esac
 done
@@ -26,7 +32,6 @@ cd kernel_workspace
 WORKSPACE_DIR="$(pwd)"
 [ -d common ] || { echo "[-] common/ not found"; exit 1; }
 
-KSU_OWNER="pershoot"
 KSU_REPO="KernelSU-Next"
 KSU_DIR="KernelSU-Next"
 UPSTREAM_REPO="KernelSU-Next/KernelSU-Next"
@@ -45,8 +50,10 @@ cd "${KSU_DIR}"
 if [ -n "${KSU_TAG}" ]; then
     echo ">>> Checking out tag: ${KSU_TAG}"
     git checkout "${KSU_TAG}" 2>/dev/null || {
-        echo "[-] Tag ${KSU_TAG} not found, falling back to branch ${KSU_BRANCH}"
-        git checkout "${KSU_BRANCH}" || { echo "[-] Branch ${KSU_BRANCH} not found"; exit 1; }
+        echo "[-] Tag ${KSU_TAG} not found in ${KSU_OWNER}/${KSU_REPO}."
+        echo "    (Upstream-only tags like vX.Y.Z-legacy-susfs require: --owner KernelSU-Next)"
+        echo "    (To use a branch instead, drop --tag and pass --branch <name>)"
+        exit 1
     }
 else
     echo ">>> Checking out branch: ${KSU_BRANCH} (SUSFS-capable)"

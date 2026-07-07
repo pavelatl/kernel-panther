@@ -34,6 +34,12 @@ on:
         default: ""
         type: string
 
+      ksu_owner:
+        description: "GitHub owner of KSU-Next repo (default pershoot = SUSFS-capable fork; use KernelSU-Next for upstream -legacy-susfs tags)"
+        required: false
+        default: "pershoot"
+        type: string
+
       spoof_timestamp:
         description: "Custom Unix epoch for build date override (blank = Google commit timestamp)"
         required: false
@@ -182,11 +188,11 @@ jobs:
           echo "  Epoch: $(git log -1 --format=%ct)"
           echo "========================================"
 
-      - name: Inject KernelSU-Next (pershoot)
+      - name: Inject KernelSU-Next
         run: |
-          KSU_ARGS="--branch ${{ inputs.ksu_branch }}"
+          KSU_ARGS="--branch ${{ inputs.ksu_branch }} --owner ${{ inputs.ksu_owner }}"
           if [ -n "${{ inputs.ksu_tag }}" ]; then
-            KSU_ARGS="--tag ${{ inputs.ksu_tag }}"
+            KSU_ARGS="--tag ${{ inputs.ksu_tag }} --owner ${{ inputs.ksu_owner }}"
           fi
           bash ./scripts/inject_ksu_next.sh $KSU_ARGS
 
